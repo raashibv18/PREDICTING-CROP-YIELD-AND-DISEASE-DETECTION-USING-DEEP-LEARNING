@@ -1,1 +1,132 @@
+import numpy as np
+import pandas as pd
+import os
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Show warnings and errors only
+
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Input
+from sklearn.model_selection import train_test_split
+
+# Load dataset
+x = pd.read_csv('C:/Users/Vijayalakshmi  K S/Downloads/crop.zip')
+
+# Define feature and target columns
+features = x[['Temperature (°C)', 'Rainfall (mm)', 'Humidity (%)', 'Soil Type', 'Weather Condition', 'Crop Type']]
+target = x['Yield (tons/hectare)']
+
+# Handle categorical features
+categorical_columns = ['Soil Type', 'Weather Condition', 'Crop Type']
+numerical_columns = ['Temperature (°C)', 'Rainfall (mm)', 'Humidity (%)']
+
+# Preprocess features
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', MinMaxScaler(), numerical_columns),  # Normalize numerical features
+        ('cat', OneHotEncoder(sparse_output=False, handle_unknown='ignore'), categorical_columns)  # One-hot encode categorical features
+    ]
+)
+
+# Split data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
+
+# Fit the preprocessor on the training data only
+preprocessor.fit(X_train)
+
+# Transform training and test data
+X_train_processed = preprocessor.transform(X_train)
+X_test_processed = preprocessor.transform(X_test)
+
+# Prepare training data for LSTM
+time_step = 10
+X_train_lstm, y_train_lstm = [], []
+for i in range(len(X_train_processed) - time_step - 1):
+    X_train_lstm.append(X_train_processed[i:(i + time_step)])
+    y_train_lstm.append(y_train.iloc[i + time_step + 1])
+X_train_lstm, y_train_lstm = np.array(X_train_lstm), np.array(y_train_lstm)
+
+# Build LSTM model
+model = Sequential([
+    Input(shape=(X_train_lstm.shape[1], X_train_lstm.shape[2])),  # Correct Input layer
+    LSTM(128, activation='tanh'),
+    Dense(64, activation='relu'),
+    Dense(1)
+])
+
+model.compile(optimizer='adam', loss='mse')
+model.fit(X_train_lstm, y_train_lstm, epochs=50, batch_size=32, validation_split=0.2)
+
+# Prepare test data for LSTM
+X_test_lstm, y_test_lstm = [], []
+for i in range(len(X_test_processed) - time_step - 1):
+    X_test_lstm.append(X_test_processed[i:(i + time_step)])
+    y_test_lstm.append(y_test.iloc[i + time_step + 1])
+X_test_lstm, y_test_lstm = np.array(X_test_lstm), np.array(y_test_lstm)
+
+# Evaluate the model on the test set
+test_loss = model.evaluate(X_test_lstm, y_test_lstm)
+#print(f"Test Loss (MSE): {test_loss}")
+
+# Make predictions on the test set
+predictions = model.predict(X_test_lstm)
+#print("Predictions:", predictions)
+
+from sklearn.metrics import mean_absolute_error, r2_score
+
+# Calculate evaluation metrics
+mae = mean_absolute_error(y_test_lstm, predictions)
+r2 = r2_score(y_test_lstm, predictions)
+#print(f"Mean Absolute Error: {mae}")
+#print(f"R² Score: {r2}")
+
+# User Input and Prediction
+print("\n--- Predict Crop Yield ---")
+print("Enter the following details for the crop prediction:")
+temperature = float(input("Temperature (°C): "))
+rainfall = float(input("Rainfall (mm): "))
+humidity = float(input("Humidity (%): "))
+soil_type = input("Soil Type (e.g., Loamy, Sandy, Clay): ")
+weather_condition = input("Weather Condition (e.g., Sunny, Cloudy, Rainy): ")
+crop_type = input("Crop Type (e.g., Wheat, Rice, Maize): ")
+
+# Create a DataFrame for the input data
+input_data = pd.DataFrame([{
+    'Temperature (°C)': temperature,
+    'Rainfall (mm)': rainfall,
+    'Humidity (%)': humidity,
+    'Soil Type': soil_type,
+    'Weather Condition': weather_condition,
+    'Crop Type': crop_type
+}])
+
+# Preprocess the input data
+try:
+    input_processed = preprocessor.transform(input_data)
+except ValueError as e:
+    print(f"Error in input data: {e}")
+    exit()
+
+# Simulate a time series for the LSTM
+input_series = np.tile(input_processed, (time_step, 1)).reshape(1, time_step, input_processed.shape[1])
+
+# Make a prediction
+predicted_yield = model.predict(input_series)[0][0]
+print(f"\nPredicted Yield for {crop_type}: {predicted_yield:.2f} tons/hectare")
+
+# Compare with the dataset
+specific_crop_data = x[x['Crop Type'] == crop_type]
+
+if specific_crop_data.empty:
+    print(f"No data found for crop type '{crop_type}' in the dataset.")
+else:
+    average_yield = specific_crop_data['Yield (tons/hectare)'].mean()
+    min_yield = specific_crop_data['Yield (tons/hectare)'].min()
+    max_yield = specific_crop_data['Yield (tons/hectare)'].max()
+
+    print(f"\nComparison with Dataset for {crop_type}:")
+    print(f"  - Average Yield: {average_yield:.2f} tons/hectare")
+    print(f"  - Minimum Yield: {min_yield:.2f} tons/hectare")
+    print(f"  - Maximum Yield: {max_yield:.2f} tons/hectare")
+    print(f"  - Difference from Average: {predicted_yield - average_yield:.2f} tons/hectare")
